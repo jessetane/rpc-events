@@ -16,6 +16,9 @@ function RpcEmitter (opts) {
   this._interface.subscribe = this._subscribe.bind(this)
   this._interface.unsubscribe = this._unsubscribe.bind(this)
   this.close = this.close.bind(this)
+  if (opts.interface) for (var key in opts.interface) {
+    this._interface[key] = opts.interface[key]
+  }
 }
 
 RpcEmitter.prototype.subscribe = function (name, fn, cb) {
