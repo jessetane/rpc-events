@@ -20,7 +20,7 @@ function handler (evt) {
   a.unsubscribe('event', handler)
 }
 
-b.interface.emit('event', 42)
+b.getInterface().emit('event', 42)
 ```
 
 ## Test
@@ -33,22 +33,29 @@ See [rpc-engine](https://github.com/jessetane/rpc-engine) for the superclass API
 
 ## Methods
 
-### `rpc.subscribe(eventName, handler[, cb])`
+### `rpc.setInterface(path[, iface])`
+### `rpc.setInterface(iface)`
+Same as superclass, but `iface` must implement `on` and `removeListener` (see [`EventEmitter`](https://nodejs.org/api/events.html) API).
+
+### `rpc.subscribe(eventName, handler[, onerror])`
 Subscribe to a remote event.
 * `eventName` A `String`.
 * `handler` A `Function`.
-* `cb` A `Function`. Optionally can be passed to find out if the remote subscription was set up successfully.
+* `onerror` A `Function`. Will be called if the remote side removes the interface before the local side has called `unsubscribe`.
 
-### `rpc.unsubscribe(eventName, handler[, cb])`
+### `rpc.unsubscribe(eventName, handler)`
 Unsubscribe from a remote event.
 * `eventName` A `String`.
 * `handler` A `Function`.
-* `cb` A `Function`. Optionally can be passed to find out if the remote subscription was torn down successfully.
 
 ### `rpc.close()`
 This method extends the superclass implementation to ensure all remote subscriptions are torn down before cancelling outstanding requests.
 
 ## Releases
+* 2.0
+  * rpc-engine@6.0.0
+  * Alter API to support scenario where remote side removes the interface a local subscription is associated with.
+  * Try to ensure local behavior is correct even if remote side misses messages or receives them out of order.
 * 1.0
   * First release
 

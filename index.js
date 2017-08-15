@@ -1,5 +1,8 @@
 module.exports = RpcEmitter
 
+var MAX_INT = Math.pow(2, 32) - 1
+var MAX_INT_HALF = Math.round(MAX_INT / 2)
+
 var RpcEngine = require('rpc-engine')
 var inherits = require('inherits')
 var Emitter = require('events')
@@ -12,91 +15,208 @@ function RpcEmitter (opts) {
     local: {},
     remote: {}
   }
-  this._interface = new Emitter()
-  this._interface.subscribe = this._subscribe.bind(this)
-  this._interface.unsubscribe = this._unsubscribe.bind(this)
+  this._subscriptionSequence = {
+    local: Math.round(Math.random() * MAX_INT),
+    remote: null
+  }
+  var defaultInterface = new Emitter()
+  defaultInterface.subscribe = this._subscribe.bind(this)
+  defaultInterface.unsubscribe = this._unsubscribe.bind(this)
+  this._interfaces[''] = defaultInterface
+  this.on('interface-remove', this._oninterfaceRemove)
   this.close = this.close.bind(this)
 }
 
-RpcEmitter.prototype.subscribe = function (name, fn, cb) {
-  cb = typeof cb === 'function' ? cb : null
-  if (!this._subscriptions.remote[name]) {
-    this._subscriptions.remote[name] = fn
-    var self = this
-    this.call('subscribe', name, function (err) {
-      if (!self._subscriptions.remote[name]) return
-      if (err) {
-        if (cb) {
-          cb.apply(null, arguments)
-        } else {
-          self.emit('error', err)
-        }
-      } else {
-        self.on(name, fn)
+RpcEmitter.prototype.close = function () {
+  for (var localIfaceName in this._subscriptions.local) {
+    var localIface = this._subscriptions.local[localIfaceName]
+    var iface = this._interfaces[localIfaceName]
+    for (var localEventName in localIface) {
+      var subscription = localIface[localEventName]
+      if (iface) {
+        var fn = subscription[0]
+        iface.removeListener(localEventName, fn)
       }
-    })
+      var cb = subscription[1]
+      if (cb) {
+        var err = new Error('Interface was removed')
+        err.code = -32002
+        cb(err)
+      }
+    }
+    delete this._subscriptions.local[localIfaceName]
   }
-  if (cb) {
-    cb()
-  }
+  this._subscriptionSequence.remote = null
+  RpcEngine.prototype.close.call(this)
 }
 
-RpcEmitter.prototype._subscribe = function (name, cb) {
-  var path = name.split(this.pathDelimiter)
-  var emitter = this.lookupInterface(path.slice(0, -1))
-  if (!emitter || !emitter.on) {
-    cb(new Error('Emitter not found'))
+RpcEmitter.prototype.subscribe = function (path, fn, cb) {
+  var sep = path.lastIndexOf(this.pathDelimiter)
+  var remoteIfaceName = sep > 0 ? path.slice(0, sep) : ''
+  var remoteIface = this._subscriptions.remote[remoteIfaceName]
+  if (!remoteIface) {
+    remoteIface = this._subscriptions.remote[remoteIfaceName] = {}
+  }
+  var remoteEventName = sep > 0 ? path.slice(sep + 1) : path
+  var subscription = remoteIface[remoteEventName]
+  if (subscription) {
+    this.on(path, fn)
+    subscription.handlers.push([fn, cb])
     return
   }
-  if (!this._subscriptions.local[name]) {
-    var self = this
-    var event = path[path.length - 1]
-    var fn = function () {
-      var args = Array.prototype.slice.call(arguments)
-      args.unshift(name)
-      self.call.apply(self, args)
+  var id = this.generateCallId()
+  subscription = remoteIface[remoteEventName] = { id, handlers: [[fn, cb]] }
+  var self = this
+  this.call(id, 'subscribe', this._generateLocalSubscriptionSequence(), path, function (err) {
+    if (err) {
+      if (err.data && err.data.existingCallbackId) {
+        id = err.data.existingCallbackId
+      } else {
+        teardown(err)
+        return
+      }
     }
-    this._subscriptions.local[name] = [
-      emitter,
-      event,
-      fn
-    ]
-    emitter.on(event, fn)
-  }
-  cb()
+    self._callbacks[id] = teardown
+    self.on(path, fn)
+    function teardown (err) {
+      subscription.handlers.forEach(function (handler) {
+        var fn = handler[0]
+        var cb = handler[1]
+        self.removeListener(remoteEventName, fn)
+        if (cb) cb(err)
+      })
+      delete remoteIface[remoteEventName]
+      if (Object.keys(remoteIface).length === 0) {
+        delete self._subscriptions.remote[remoteIfaceName]
+      }
+    }
+  })
 }
 
-RpcEmitter.prototype.unsubscribe = function (name, fn, cb) {
-  delete this._subscriptions.remote[name]
-  this.removeListener(name, fn)
-  if (this.listenerCount(name) === 0) {
-    this.call('unsubscribe', name, cb)
-  } else if (typeof cb === 'function') {
-    cb()
+RpcEmitter.prototype.unsubscribe = function (path, fn) {
+  var sep = path.lastIndexOf(this.pathDelimiter)
+  var remoteIfaceName = sep > 0 ? path.slice(0, sep) : ''
+  var remoteIface = this._subscriptions.remote[remoteIfaceName]
+  if (!remoteIface) {
+    return
+  }
+  var remoteEventName = sep > 0 ? path.slice(sep + 1) : path
+  var subscription = remoteIface[remoteEventName]
+  if (!subscription) {
+    return
+  }
+  for (var i = subscription.handlers.length - 1; i > -1; i--) {
+    var handler = subscription.handlers[i]
+    if (handler[0] === fn) {
+      this.removeListener(path, fn)
+      subscription.handlers.splice(i, 1)
+      break
+    }
+  }
+  if (subscription.handlers.length === 0) {
+    var cb = this._callbacks[subscription.id]
+    if (cb) clearTimeout(cb.timeout)
+    delete this._callbacks[subscription.id]
+    delete remoteIface[remoteEventName]
+    if (Object.keys(remoteIface).length === 0) {
+      delete this._subscriptions.remote[remoteIfaceName]
+    }
+    this.call('unsubscribe', this._generateLocalSubscriptionSequence(), path)
   }
 }
 
-RpcEmitter.prototype._unsubscribe = function (name, cb) {
-  var subscription = this._subscriptions.local[name]
+RpcEmitter.prototype._subscribe = function (i, path, cb) {
+  if (!this._isRemoteSubscriptionSequenceValid(i)) return
+  var sep = path.lastIndexOf(this.pathDelimiter)
+  var localIfaceName = sep > 0 ? path.slice(0, sep) : ''
+  var iface = this._interfaces[localIfaceName]
+  if (!iface) {
+    var err = new Error('Interface not found')
+    err.code = -32000
+    cb(err)
+    return
+  }
+  var localIface = this._subscriptions.local[localIfaceName]
+  if (!localIface) {
+    localIface = this._subscriptions.local[localIfaceName] = {}
+  }
+  var localEventName = sep > 0 ? path.slice(sep + 1) : path
+  var subscription = localIface[localEventName]
   if (subscription) {
-    subscription[0].removeListener(subscription[1], subscription[2])
-    delete this._subscriptions.local[name]
+    var err = new Error('Subscription exists')
+    var _cb = subscription[1]
+    err.data = {
+      existingCallbackId: _cb.id
+    }
+    err.code = -32001
+    cb(err)
+    return
   }
-  if (typeof cb === 'function') {
-    cb()
+  iface.on(localEventName, fn)
+  localIface[localEventName] = [fn, cb]
+  var self = this
+  cb()
+  function fn () {
+    var args = Array.prototype.slice.call(arguments)
+    args.unshift(path)
+    self.call.apply(self, args)
   }
 }
 
-RpcEmitter.prototype.close = function () {
-  for (var name in this._subscriptions.local) {
-    var subscription = this._subscriptions.local[name]
-    delete this._subscriptions.local[name]
-    subscription[0].removeListener(subscription[1], subscription[2])
+RpcEmitter.prototype._unsubscribe = function (i, path) {
+  if (!this._isRemoteSubscriptionSequenceValid(i)) return
+  var sep = path.lastIndexOf(this.pathDelimiter)
+  var localIfaceName = sep > 0 ? path.slice(0, sep) : ''
+  var localIface = this._subscriptions.local[localIfaceName]
+  if (!localIface) return
+  var localEventName = sep > 0 ? path.slice(sep + 1) : path
+  var subscription = localIface[localEventName]
+  if (!subscription) return
+  delete localIface[localEventName]
+  var iface = this._interfaces[localIfaceName]
+  if (iface) {
+    iface.removeListener(localEventName, subscription[0])
   }
-  for (var name in this._subscriptions.remote) {
-    var fn = this._subscriptions.remote[name]
-    delete this._subscriptions.remote[name]
-    this.removeListener(name, fn)
+  if (Object.keys(localIface).length === 0) {
+    delete this._subscriptions.local[localIfaceName]
   }
-  RpcEngine.prototype.close.call(this)
+  return subscription
+}
+
+RpcEmitter.prototype._oninterfaceRemove = function (iface, path) {
+  var sep = path.lastIndexOf(this.pathDelimiter)
+  var localIface = this._subscriptions.local[path]
+  if (!localIface) return
+  delete this._subscriptions.local[path]
+  for (var localEventName in localIface) {
+    var subscription = localIface[localEventName]
+    if (subscription) {
+      iface.removeListener(localEventName, subscription[0])
+      var cb = subscription[1]
+      if (cb) {
+        var err = new Error('Interface was removed')
+        err.code = -32002
+        cb(err)
+      }
+    }
+  }
+}
+
+RpcEmitter.prototype._generateLocalSubscriptionSequence = function () {
+  var i = ++this._subscriptionSequence.local
+  if (i >= MAX_INT) {
+    i = this._subscriptionSequence.local = 0
+  }
+  return i
+}
+
+RpcEmitter.prototype._isRemoteSubscriptionSequenceValid = function (i) {
+  if (i >= 0) {
+    if (this._subscriptionSequence.remote === null ||
+        this._subscriptionSequence.remote < i ||
+        this._subscriptionSequence.remote - MAX_INT_HALF > i) {
+      this._subscriptionSequence.remote = i
+      return true
+    }
+  }
 }
