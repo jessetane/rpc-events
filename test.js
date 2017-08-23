@@ -124,6 +124,7 @@ tape('handle accidential double subscribe gracefully', function (t) {
   a.getInterface().emit('event', 42)
   function handler (data) {
     t.equal(data, 42)
+    b.close()
     a.close()
   }
 })
@@ -189,4 +190,22 @@ tape('show that unsubscribe is "best effort"', function (t) {
     b.unsubscribe('event', t.fail)
   })
   a.getInterface().emit('event', 42)
+})
+
+tape('reopen existing subscriptions', function (t) {
+  t.plan(2)
+  a.setInterface('sub', new Emitter())
+  b.subscribe('sub.event', handler, t.fail)
+  a.closeRemote()
+  b.closeRemote()
+  a.send = b.receive
+  b.send = a.receive
+  b.open()
+  a.getInterface('sub').emit('event', 42)
+  function handler (data) {
+    t.equal(data, 42)
+    b.unsubscribe('sub.event', handler)
+    t.equal(b.listenerCount('sub.event'), 0)
+    a.setInterface('sub', null)
+  }
 })

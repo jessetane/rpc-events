@@ -31,7 +31,22 @@ function RpcEmitter (opts) {
   this.close = this.close.bind(this)
 }
 
-RpcEmitter.prototype.close = function () {
+RpcEmitter.prototype.open = function () {
+  var self = this
+  Object.keys(this._subscriptions.remote).forEach(function (remoteIfaceName) {
+    var remoteIface = self._subscriptions.remote[remoteIfaceName]
+    Object.keys(remoteIface).forEach(function (remoteEventName) {
+      var subscription = remoteIface[remoteEventName]
+      var cb = self._callbacks[subscription.id]
+      if (cb && cb._isTeardownHandler) {
+        var path = remoteIfaceName ? (remoteIfaceName + self.pathDelimiter + remoteEventName) : remoteEventName
+        self._dosubscribe(remoteIfaceName, remoteIface, remoteEventName, subscription, path)
+      }
+    })
+  })
+}
+
+RpcEmitter.prototype.closeRemote = function () {
   for (var localIfaceName in this._subscriptions.local) {
     var localIface = this._subscriptions.local[localIfaceName]
     var iface = this._interfaces[localIfaceName]
@@ -45,6 +60,26 @@ RpcEmitter.prototype.close = function () {
     delete this._subscriptions.local[localIfaceName]
   }
   this._subscriptionSequence.remote = null
+}
+
+RpcEmitter.prototype.closeLocal = function () {
+  var self = this
+  for (var remoteIfaceName in this._subscriptions.remote) {
+    var remoteIface = this._subscriptions.remote[remoteIfaceName]
+    for (var remoteEventName in remoteIface) {
+      var subscription = remoteIface[remoteEventName]
+      subscription.handlers.forEach(function (handler) {
+        self.removeListener(remoteEventName, handler[0])
+      })
+      delete this._callbacks[subscription.id]
+    }
+    delete this._subscriptions.remote[remoteIfaceName]
+  }
+}
+
+RpcEmitter.prototype.close = function () {
+  this.closeRemote()
+  this.closeLocal()
   RpcEngine.prototype.close.call(this)
 }
 
@@ -57,13 +92,18 @@ RpcEmitter.prototype.subscribe = function (path, fn, cb) {
   }
   var remoteEventName = sep > 0 ? path.slice(sep + 1) : path
   var subscription = remoteIface[remoteEventName]
+  this.on(path, fn)
   if (subscription) {
-    this.on(path, fn)
     subscription.handlers.push([fn, cb])
-    return
+  } else {
+    var id = this.generateCallId()
+    subscription = remoteIface[remoteEventName] = { id, handlers: [[fn, cb]] }
+    this._dosubscribe(remoteIfaceName, remoteIface, remoteEventName, subscription, path)
   }
-  var id = this.generateCallId()
-  subscription = remoteIface[remoteEventName] = { id, handlers: [[fn, cb]] }
+}
+
+RpcEmitter.prototype._dosubscribe = function (remoteIfaceName, remoteIface, remoteEventName, subscription, path) {
+  var id = subscription.id
   var self = this
   this.call(id, 'subscribe', this._generateLocalSubscriptionSequence(), path, function (err) {
     if (err) {
@@ -74,13 +114,13 @@ RpcEmitter.prototype.subscribe = function (path, fn, cb) {
         return
       }
     }
+    teardown._isTeardownHandler = true
     self._callbacks[id] = teardown
-    self.on(path, fn)
     function teardown (err) {
       subscription.handlers.forEach(function (handler) {
         var fn = handler[0]
         var cb = handler[1]
-        self.removeListener(remoteEventName, fn)
+        self.removeListener(path, fn)
         if (cb) cb(err)
       })
       delete remoteIface[remoteEventName]
