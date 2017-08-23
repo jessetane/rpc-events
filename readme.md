@@ -14,7 +14,11 @@ var Rpc = require('rpc-events')
 var a = new Rpc()
 var b = new Rpc()
 
+a.send = b.receive
+b.send = a.receive
+
 a.subscribe('event', handler)
+
 function handler (evt) {
   console.log(evt) // => 42
   a.unsubscribe('event', handler)
