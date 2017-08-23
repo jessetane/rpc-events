@@ -86,14 +86,14 @@ tape('call error handlers if remote side removes interface', function (t) {
   t.plan(6)
   var oldDefaultInterface = a.getInterface()
   a.setInterface('sub', new Emitter())
-  b.subscribe('event1', handler1, err => {
+  b.subscribe('event1', handler1, function (err) {
     t.equal(err.message, 'Interface was removed')
   })
-  b.subscribe('event2', handler2, err => {
+  b.subscribe('event2', handler2, function (err) {
     t.equal(err.message, 'Interface was removed')
     a.setInterface('sub', null)
   })
-  b.subscribe('sub.event3', handler3, err => {
+  b.subscribe('sub.event3', handler3, function (err) {
     t.equal(err.message, 'Interface was removed')
     a.setInterface('', oldDefaultInterface)
   })
