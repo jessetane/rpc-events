@@ -41,12 +41,6 @@ RpcEmitter.prototype.close = function () {
         var fn = subscription[0]
         iface.removeListener(localEventName, fn)
       }
-      var cb = subscription[1]
-      if (cb) {
-        var err = new Error('Interface was removed')
-        err.code = -32002
-        cb(err)
-      }
     }
     delete this._subscriptions.local[localIfaceName]
   }
