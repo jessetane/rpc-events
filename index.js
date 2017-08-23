@@ -19,11 +19,15 @@ function RpcEmitter (opts) {
     local: Math.round(Math.random() * MAX_INT),
     remote: null
   }
-  var defaultInterface = new Emitter()
-  defaultInterface.subscribe = this._subscribe.bind(this)
-  defaultInterface.unsubscribe = this._unsubscribe.bind(this)
-  this._interfaces[''] = defaultInterface
+  var self = this
+  this.on('interface-add', function (iface, path) {
+    if (path === '') {
+      iface.subscribe = self._subscribe.bind(self)
+      iface.unsubscribe = self._unsubscribe.bind(self)
+    }
+  })
   this.on('interface-remove', this._oninterfaceRemove)
+  this.setInterface('', new Emitter())
   this.close = this.close.bind(this)
 }
 
