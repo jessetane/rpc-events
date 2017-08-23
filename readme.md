@@ -48,10 +48,20 @@ Unsubscribe from a remote event.
 * `eventName` A `String`.
 * `handler` A `Function`.
 
+### `rpc.open()`
+This method will reinform the remote about the currently active subscriptions. This is useful for implementing persistent connections where transports may come and go transparently.
+
 ### `rpc.close()`
-This method extends the superclass implementation to ensure all remote subscriptions are torn down before cancelling outstanding requests.
+This method extends the superclass implementation to ensure all local and remote subscriptions are torn down before cancelling outstanding requests.
+
+### `rpc.closeLocal()`
+### `rpc.closeRemote()`
+These methods are invoked by `rpc.close` but can be useful independently. Closing the local side removes everything created by calls to `rpc.subscribe`, and closing the remote side removes all subscriptions created by the remote peer. `rpc.closeRemote` is useful in situations where you plan to reopen the connection at some point without losing track of your subscriptions, but can't be sure if the remote plans to do the same.
 
 ## Releases
+* 2.1
+  * Add `open` method
+  * Split `close` out into its local and remote components
 * 2.0
   * rpc-engine@6.0.0
   * Alter API to support scenario where remote side removes the interface a local subscription is associated with.
