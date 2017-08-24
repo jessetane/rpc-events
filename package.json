@@ -1,6 +1,6 @@
 {
   "name": "rpc-events",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "An rpc-engine subclass that makes doing pub-sub things super easy",
   "scripts": {
     "test": "node test"
