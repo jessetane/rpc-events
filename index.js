@@ -29,6 +29,9 @@ function RpcEmitter (opts) {
   this.on('interface-remove', this._oninterfaceRemove)
   this.setInterface('', new Emitter())
   this.close = this.close.bind(this)
+  if (opts.interface) for (var key in opts.interface) {
+    this._interface[key] = opts.interface[key]
+  }
 }
 
 RpcEmitter.prototype.open = function () {
